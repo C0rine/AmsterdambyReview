@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='utf-8'>
+    <title>Amsterdam by Reviews</title>
+    <link rel='stylesheet' type='text/css' href='css/reset.css'>
+    <link rel='stylesheet' type='text/css' href='css/calaca.css'>
+    <script src='bower_components/angular/angular.min.js' type='text/javascript'></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+    <!--[if IE]>
+        <script src='http://html5shiv.googlecode.com/svn/trunk/html5.js'></script>
+    <![endif]-->
+</head>
+<body ng-app='calaca' ng-controller='calacaCtrl'>
+
+<!-- Title and search box -->
+<header class='jumbotron'>
+  
+  <h1 class='title'>Amsterdam by Reviews</h1>
+  <h4 class='title'>By Corine Jacobs & Nout van Deijck</h3>
+
+  <div class='search-box-container'>
+    <div data-tip="What kind of place are you looking for? (e.g. 'restaurant nice view')">
+      <input type='text' class='search-box' placeholder='Search' autofocus ng-model='query' ng-change='delayedSearch(0)'>
+      
+      <!-- <input type='text' class='search-box' placeholder='Type' ng-model='placetype' ng-change='delayedSearch(0)' value="all"> -->
+
+      <div id="dropdownmenu" class="wrapper-dropdown-5" tabindex="1">
+        Category: 
+        <select ng-init="placetype = 'all' || items[0]" class='dropdown_type' ng-model='placetype' ng-change='delayedSearch(0)' value="all">
+          <option value="all" ng-selected="selected">All</option>
+          <option value="bar">Bar</option>
+          <option value="restaurant">Restaurant</option>
+          <option value="museum">Museum</option>
+          <option value="movie_theater">Movie Theater</option>
+          <option value="gym">Gym</option>
+          <option value="lodging">Hotel/B&B</option>
+          <option value="store">Shop</option>
+          <option value="place_of_worship">Place of worship</option>
+          <option value="bakery">Bakery</option>
+        </select>
+      </div>
+    </div>
+    
+  </div>
+</header>
+
+<!-- Listing of search results -->
+<main class='results-container' ng-cloak>
+  <section class='results-info'>
+    <p id='response-details'>{{(hits | number) || 0}} {{resultsLabel || 'results'}} ({{(timeTook || 0)}}ms)</p>
+    <p ng-show='paginationEnabled()' id='pagination-details'>Showing {{paginationLowerBound}} - {{paginationUpperBound}}</p>
+  </section>
+
+
+  <section class='results'>
+    <div style="visibility: none; display: none;">{{createLocations()}}</div>
+    <div id="map" ></div>
+    <p class='no-results' ng-show='!results.length && !loading'>No results yet...</p>
+    <article class='result' ng-repeat='result in results track by $id(result)'>
+      <p class="rating-field">Average rating: <b>{{result.rating}}</b>, Positivity: <b>{{result.sentiment.substr(0,4)}}</b></p> 
+      <h2 class="name-field">{{$index + 1}}: <a href="{{result.website}}" target="_blank" >{{result.name}}</a></h2>
+      <p class="address-field">Address: {{result.formatted_address}} - Telephone: <a href="tel:{{result.international_phone_number}}">{{result.international_phone_number}}</a></p>
+      <p class="types-field">{{result.types.replace('point_of_interest, ','').replace(', establishment','').replace('_',' ').replace('_',' ')}}</p>
+      <p class="reviews-field">(...) <span ng-bind-html="result._highlight"></span> (...)</p>
+    </article>
+  </section>
+  <section class='pagination-controls'>
+    <button ng-click='search(-1)' ng-show='paginationEnabled() && offset !== 0' class='pager'>Previous</button><button ng-click='search(1)' ng-show='paginationEnabled()' class='pager'>Next</button>
+  </section>
+</main>
+
+<!-- Load resources -->
+<script src='bower_components/angular-animate/angular-animate.min.js' type='text/javascript'></script>
+<script src='bower_components/elasticsearch/elasticsearch.angular.min.js' type='text/javascript'></script>
+<script src="http://ajax.googleapis.com/ajax/libs/angularjs/1.2.26/angular-sanitize.js" type="text/javascript"></script>
+<script src='js/config.js' type='text/javascript'></script>
+<script src='js/app.js' type='text/javascript'></script>
+<script src='js/controllers.js' type='text/javascript'></script>
+<script src='js/services.js' type='text/javascript'></script>
+  <script>
+
+    // map stays on top
+    // $(window).scroll(function() {
+    //   if ($(this).scrollTop() > 370) {
+    //     $('#map').css('top', $(this).scrollTop()-370 + "px");
+    //   }
+      
+    // });
+
+    // var locations = [{lat: 52.36711099999999, lng: 4.862746999999999}, {lat: 52.370295, lng: 4.859303}, {lat: 52.3649184, lng: 4.882298}, {lat: 52.3782917, lng: 4.848731700000001}, {lat: 52.37348110000001, lng: 4.888006799999999}, {lat: 52.3530658, lng: 4.890853799999999}]
+    
+    var map
+    var markersArray = []
+    var Amsterdam = {lat: 52.3702, lng: 4.8952};
+
+    window.initMap = function() {
+        
+        map = new google.maps.Map(document.getElementById('map'), {
+            zoom: 13,
+            center: Amsterdam,
+            scaleControl: true
+        });
+
+    }
+
+    window.createMarkers = function(locations, names, ratings, sentiments, tels) {
+      clearOverlays();
+
+      for (i = 0; i < locations.length; i++) { 
+
+          createSingleMarker(i, locations, names[i], ratings[i], sentiments[i], tels[i])
+      }
+
+
+      var bounds = new google.maps.LatLngBounds();
+      for (var i = 0; i < markersArray.length; i++) {
+       bounds.extend(markersArray[i].getPosition());
+      }
+      map.setCenter(bounds.getCenter());
+      map.fitBounds(bounds);
+      // map.setZoom(map.getZoom()-1);
+
+      if(map.getZoom()> 14){
+        map.setZoom(14);
+      }
+      if(markersArray.length == 0) {
+        map.setZoom(13);
+        map.setCenter(Amsterdam);
+      }
+
+        
+    }
+
+    window.createSingleMarker = function(i,locations, name, rating, sentiment, tel) {
+     
+      
+      // marker.addListener('click', function() {
+      //     closeInfoWindow();
+
+      //     var infowindow = new google.maps.InfoWindow({
+      //         content: String(i+1)
+      //     });
+
+      //     infowindow.open(map, this);
+      //     $(document).ready(function(){
+      //         var needle = 'café';
+      //         $('#text').html($('#text').html().replace(needle, '<a id="imhere"></a>'+needle));
+      //         $('html,body').animate({scrollTop: $('#imhere').offset().top}); 
+      //     });
+      // });
+      
+      infowindowContent = "<p class='infowindow'>" +
+                          "<span class='infowindowtitle'>" + name + "</span><br />" +
+                          "Rating: <b>" + rating + "</b>, " +
+                          "Sentiment: <b>" + sentiment + "</b><br />" +
+                          "Tel: <b>" + tel + "</b></p>";
+
+      var locationInfowindow = new google.maps.InfoWindow({
+        content: infowindowContent,
+      });
+
+      var marker = new google.maps.Marker({
+        position: locations[i],
+        map: map,
+        label: String(i+1),
+        infowindow: locationInfowindow
+      });
+
+      markersArray.push(marker);
+
+      google.maps.event.addListener(marker, 'click', function() {
+        hideAllInfoWindows(map);
+        this.infowindow.open(map, this);
+      });
+
+      google.maps.event.addListener(map, "click", function(event) {
+        hideAllInfoWindows(map);
+      });
+
+
+      return marker;
+    }
+
+    function hideAllInfoWindows(map) {
+       markersArray.forEach(function(marker) {
+         marker.infowindow.close(map, marker);
+      }); 
+    }
+
+    function clearOverlays() {
+      for (var i = 0; i < markersArray.length; i++ ) {
+        markersArray[i].setMap(null);
+      }
+      markersArray.length = 0;
+    }
+
+
+    function closeInfoWindow() {
+      if (infoWindow !== null) {
+          google.maps.event.clearInstanceListeners(infoWindow);  // just in case handlers continue to stick around
+          infoWindow.close();
+          infoWindow = null;
+      }
+    }
+
+  </script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBohmrYshbokHjbFIpkbjUJgK9mKkt8IB0&callback=initMap"></script>
+    <!--<p id="text">Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velilit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur? Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla pariatur?  <br>
+  Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod <b>########################### Een leuk café #######################</b> tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi arch ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur? Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla pariatur?  <br></p> -->
+
+</body>
+</html>
+
+
+
+
+
+
